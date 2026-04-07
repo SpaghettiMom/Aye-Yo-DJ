@@ -153,12 +153,8 @@ class PlayCog(commands.Cog):
                         track_data = self.suggestions[idx]
                         logger.info(f"Track selected: {track_data['title']} - {track_data['artist']}")
                         
-                        # Get the actual track
-                        tracks, _ = await MusicSearch.search(
-                            track_data['title'],
-                            search_type=source
-                        )
-                        logger.info(f"Search returned {len(tracks) if tracks else 0} tracks")
+                        # Load the exact track by URL to avoid a keyword re-search returning a different result
+                        tracks, _ = await MusicSearch.search(track_data['url'])
                         
                         if not tracks:
                             embed = EmbedBuilder.create_error_embed(
@@ -168,8 +164,6 @@ class PlayCog(commands.Cog):
                             return
                         
                         track = tracks[0]
-                        logger.info(f"Track object: {track} | Type: {type(track)}")
-                        logger.info(f"Track attributes: title={getattr(track, 'title', 'N/A')}, uri={getattr(track, 'uri', 'N/A')}")
                         
                         # Add to queue
                         self.player.add_track(track)
