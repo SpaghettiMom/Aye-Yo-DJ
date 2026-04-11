@@ -18,12 +18,13 @@ LAVALINK_PASSWORD = os.getenv("LAVALINK_PASSWORD", "youshallnotpass")
 # Spotify Settings
 SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
 SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
+SPOTIFY_REFRESH_TOKEN = os.getenv("SPOTIFY_REFRESH_TOKEN")
 
 # Music Bot Settings
 DEFAULT_VOLUME = 100
-MAX_QUEUE_SIZE = 500
+MAX_QUEUE_SIZE = 1000
 SEARCH_RESULTS_COUNT = 5
-RADIO_JINGLE_URL = "https://www.youtube.com/watch?v=FKswSb0x0vg"
+RADIO_JINGLE_URL = "https://www.youtube.com/watch?v=yx28m-M--4Q"
 
 # Colors for embeds
 COLORS = {

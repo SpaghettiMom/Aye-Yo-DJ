@@ -59,10 +59,7 @@ class EventsCog(commands.Cog):
             if next_track:
                 bot_player.current_track = next_track
                 
-                # Post now playing message
-                await self.post_now_playing(player, next_track)
-                
-                # Play the track
+                # Play the track (on_wavelink_track_start will post the now playing embed)
                 await player.play(next_track)
                 
                 # Handle loop all

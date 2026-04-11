@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 class MusicPlayer:
     """Manages music playback, queue, and player state"""
     
-    def __init__(self, guild_id: int, max_queue_size: int = 500):
+    def __init__(self, guild_id: int, max_queue_size: int = 1000):
         self.guild_id = guild_id
         self.queue = deque(maxlen=max_queue_size)
         self.current_track: Optional[wavelink.Playable] = None

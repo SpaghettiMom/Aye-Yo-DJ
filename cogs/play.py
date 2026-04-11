@@ -7,6 +7,7 @@ from discord.ext import commands
 from discord import app_commands
 import wavelink
 import logging
+from typing import List
 from utils.search import MusicSearch
 from utils.embed_builder import EmbedBuilder
 from utils.player import MusicPlayer
@@ -26,7 +27,26 @@ class PlayCog(commands.Cog):
         if guild_id not in self.bot.players:
             self.bot.players[guild_id] = MusicPlayer(guild_id)
         return self.bot.players[guild_id]
-    
+
+    async def query_autocomplete(
+        self,
+        interaction: discord.Interaction,
+        current: str,
+    ) -> List[app_commands.Choice[str]]:
+        if not current or len(current) < 2:
+            return []
+        try:
+            suggestions = await MusicSearch.get_suggestions(current, limit=6)
+            choices = []
+            for s in suggestions:
+                label = f"{s['title']} - {s['artist']}"
+                choices.append(
+                    app_commands.Choice(name=label[:100], value=s['url'])
+                )
+            return choices
+        except Exception:
+            return []
+
     @app_commands.command(
         name="play",
         description="Play a song from YouTube or Spotify"
@@ -35,6 +55,7 @@ class PlayCog(commands.Cog):
         query="Song name, artist, or URL",
         source="Music source (youtube, spotify)"
     )
+    @app_commands.autocomplete(query=query_autocomplete)
     async def play(
         self,
         interaction: discord.Interaction,
@@ -103,120 +124,101 @@ class PlayCog(commands.Cog):
             
             # Get or create player
             player = await self.get_or_create_player(interaction.guild_id)
-            
-            # Show search suggestions
-            suggestions = await MusicSearch.get_suggestions(query, limit=5, search_type=source)
-            
-            if not suggestions:
-                embed = EmbedBuilder.create_error_embed(
-                    f"No results found for: {query}"
+
+            # If the query is a URL (e.g. selected from autocomplete), play it directly
+            is_url = query.startswith("http://") or query.startswith("https://")
+            if is_url:
+                # Detect playlist URLs
+                is_playlist = (
+                    "open.spotify.com/playlist/" in query
+                    or "youtube.com/playlist" in query
+                    or ("list=" in query and ("youtube.com" in query or "youtu.be" in query))
                 )
+                if is_playlist:
+                    tracks, source = await MusicSearch.search_playlist(query)
+                    if not tracks:
+                        embed = EmbedBuilder.create_error_embed(
+                            "Could not load any tracks from that playlist.\n\n"
+                            "**If this is a Spotify playlist**, your Spotify developer app may need "
+                            "Web API access enabled:\n"
+                            "1. Go to https://developer.spotify.com/dashboard\n"
+                            "2. Open your app → Settings\n"
+                            "3. Enable **Web API** and save"
+                        )
+                        await interaction.followup.send(embed=embed)
+                        return
+                    added = player.add_tracks(tracks)
+                    embed = EmbedBuilder.create_track_added_embed(tracks[:added], playlist=True)
+                    embed.add_field(name="Total Tracks", value=str(len(tracks)), inline=True)
+                    embed.add_field(name="Added to Queue", value=str(added), inline=True)
+                    await interaction.followup.send(embed=embed)
+                    if not voice_client.playing:
+                        next_track = player.next_track()
+                        if next_track:
+                            if not player.jingle_played and RADIO_JINGLE_URL:
+                                try:
+                                    jingle_results, _ = await MusicSearch.search(RADIO_JINGLE_URL)
+                                    if jingle_results:
+                                        player.jingle_played = True
+                                        player.queue.appendleft(next_track)
+                                        next_track = jingle_results[0]
+                                except Exception as jingle_error:
+                                    logger.warning(f"Could not load jingle: {jingle_error}")
+                            await voice_client.play(next_track)
+                    return
+
+                tracks, _ = await MusicSearch.search(query)
+                if not tracks:
+                    embed = EmbedBuilder.create_error_embed(f"Could not load track: {query}")
+                    await interaction.followup.send(embed=embed)
+                    return
+                track = tracks[0]
+                player.add_track(track)
+                embed = EmbedBuilder.create_track_added_embed([track])
+                embed.add_field(name="Position in Queue", value=f"{player.get_queue_size()}", inline=True)
+                await interaction.followup.send(embed=embed)
+                if not voice_client.playing:
+                    next_track = player.next_track()
+                    if next_track:
+                        if not player.jingle_played and RADIO_JINGLE_URL:
+                            try:
+                                jingle_results, _ = await MusicSearch.search(RADIO_JINGLE_URL)
+                                if jingle_results:
+                                    player.jingle_played = True
+                                    player.queue.appendleft(next_track)
+                                    next_track = jingle_results[0]
+                            except Exception as jingle_error:
+                                logger.warning(f"Could not load jingle: {jingle_error}")
+                        await voice_client.play(next_track)
+                return
+
+            # Plain text query – search and play the top result directly
+            tracks, _ = await MusicSearch.search(query, search_type=source)
+            if not tracks:
+                embed = EmbedBuilder.create_error_embed(f"No results found for: {query}")
                 await interaction.followup.send(embed=embed)
                 return
-            
-            # Create search results embed
-            embed = EmbedBuilder.create_search_result(
-                "Search Results",
-                suggestions,
-                query
-            )
-            
-            # Add select menu for track selection
-            from discord.ui import View, Select
-            
-            class TrackSelect(Select):
-                def __init__(self, suggestions, cog, voice_client, player, interaction):
-                    self.suggestions = suggestions
-                    self.cog = cog
-                    self.voice_client = voice_client
-                    self.player = player
-                    self.interaction_obj = interaction
-                    
-                    options = [
-                        discord.SelectOption(
-                            label=suggestion['title'][:100],
-                            value=str(i),
-                            description=suggestion['artist'][:100]
-                        )
-                        for i, suggestion in enumerate(suggestions)
-                    ]
-                    super().__init__(
-                        placeholder="Select a track...",
-                        options=options
-                    )
-                
-                async def callback(self, select_interaction: discord.Interaction):
-                    await select_interaction.response.defer()
-                    
-                    try:
-                        idx = int(self.values[0])
-                        track_data = self.suggestions[idx]
-                        logger.info(f"Track selected: {track_data['title']} - {track_data['artist']}")
-                        
-                        # Load the exact track by URL to avoid a keyword re-search returning a different result
-                        tracks, _ = await MusicSearch.search(track_data['url'])
-                        
-                        if not tracks:
-                            embed = EmbedBuilder.create_error_embed(
-                                "Failed to load track"
-                            )
-                            await select_interaction.followup.send(embed=embed)
-                            return
-                        
-                        track = tracks[0]
-                        
-                        # Add to queue
-                        self.player.add_track(track)
-                        logger.info(f"Added track to queue. Queue size: {self.player.get_queue_size()}")
-                        
-                        # Show added embed
-                        embed = EmbedBuilder.create_track_added_embed([track])
-                        embed.add_field(
-                            name="Position in Queue",
-                            value=f"{self.player.get_queue_size()}",
-                            inline=True
-                        )
-                        
-                        await select_interaction.followup.send(embed=embed)
-                        
-                        # Play if no track is currently playing
-                        if not self.voice_client.playing:
-                            next_track = self.player.next_track()
-                            if next_track:
-                                # Play jingle once at the start of a new queue session
-                                if not self.player.jingle_played and RADIO_JINGLE_URL:
-                                    try:
-                                        jingle_results, _ = await MusicSearch.search(RADIO_JINGLE_URL)
-                                        if jingle_results:
-                                            self.player.jingle_played = True
-                                            # Re-insert the selected track back so it plays after the jingle
-                                            self.player.queue.appendleft(next_track)
-                                            next_track = jingle_results[0]
-                                            logger.info(f"Playing jingle before queue start")
-                                    except Exception as jingle_error:
-                                        logger.warning(f"Could not load jingle: {jingle_error}")
 
-                                try:
-                                    await self.voice_client.play(next_track)
-                                    logger.info(f"Track sent to Lavalink. Voice client playing: {self.voice_client.playing}")
-                                except Exception as play_error:
-                                    logger.error(f"Error playing track: {play_error}", exc_info=True)
-                                    raise
-                            else:
-                                logger.warning("No next track available after adding to queue")
-                        else:
-                            logger.info(f"Voice client already playing, added to queue for later")
-                        
-                    except Exception as e:
-                        embed = EmbedBuilder.create_error_embed(
-                            f"Error: {str(e)}"
-                        )
-                        await select_interaction.followup.send(embed=embed)
-            
-            view = View()
-            view.add_item(TrackSelect(suggestions, self, voice_client, player, interaction))
-            
-            await interaction.followup.send(embed=embed, view=view)
+            track = tracks[0]
+            player.add_track(track)
+            embed = EmbedBuilder.create_track_added_embed([track])
+            embed.add_field(name="Position in Queue", value=f"{player.get_queue_size()}", inline=True)
+            await interaction.followup.send(embed=embed)
+
+            if not voice_client.playing:
+                next_track = player.next_track()
+                if next_track:
+                    if not player.jingle_played and RADIO_JINGLE_URL:
+                        try:
+                            jingle_results, _ = await MusicSearch.search(RADIO_JINGLE_URL)
+                            if jingle_results:
+                                player.jingle_played = True
+                                player.queue.appendleft(next_track)
+                                next_track = jingle_results[0]
+                                logger.info("Playing jingle before queue start")
+                        except Exception as jingle_error:
+                            logger.warning(f"Could not load jingle: {jingle_error}")
+                    await voice_client.play(next_track)
             
         except Exception as e:
             logger.error(f"Play command error: {e}")

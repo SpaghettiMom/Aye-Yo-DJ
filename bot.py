@@ -112,6 +112,12 @@ async def on_ready():
         activity=discord.Activity(type=discord.ActivityType.listening, name="/play")
     )
     
+    # Sync slash commands with Discord so autocomplete is registered
+    if not hasattr(bot, 'commands_synced'):
+        synced = await bot.tree.sync()
+        bot.commands_synced = True
+        logger.info(f"Synced {len(synced)} slash command(s) with Discord")
+
     # Setup Lavalink after bot is ready
     if not hasattr(bot, 'lavalink_connected'):
         await setup_lavalink()
