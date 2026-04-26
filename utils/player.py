@@ -23,6 +23,9 @@ class MusicPlayer:
         self.loop_mode = "off"  # "off", "one", "all"
         self.volume = 100
         self.jingle_played = False
+        self.autoplay = False
+        self.played_tracks = set()  # Track URIs of played tracks to avoid repeats
+        self.current_requester = None  # discord.Member who requested the current track
     
     def add_track(self, track: wavelink.Playable) -> bool:
         """
@@ -170,5 +173,8 @@ class MusicPlayer:
         self.is_paused = False
         self.loop_mode = "off"
         self.volume = 100
+        self.autoplay = False
         self.current_message_id = None
         self.current_channel_id = None
+        self.played_tracks.clear()
+        self.current_requester = None

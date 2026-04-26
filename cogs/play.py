@@ -147,6 +147,8 @@ class PlayCog(commands.Cog):
                         )
                         await interaction.followup.send(embed=embed)
                         return
+                    for t in tracks:
+                        t.requester = interaction.user
                     added = player.add_tracks(tracks)
                     embed = EmbedBuilder.create_track_added_embed(tracks[:added], playlist=True)
                     embed.add_field(name="Total Tracks", value=str(len(tracks)), inline=True)
@@ -164,6 +166,7 @@ class PlayCog(commands.Cog):
                                         next_track = jingle_results[0]
                                 except Exception as jingle_error:
                                     logger.warning(f"Could not load jingle: {jingle_error}")
+                            player.current_requester = getattr(next_track, 'requester', None)
                             await voice_client.play(next_track)
                     return
 
@@ -173,6 +176,7 @@ class PlayCog(commands.Cog):
                     await interaction.followup.send(embed=embed)
                     return
                 track = tracks[0]
+                track.requester = interaction.user
                 player.add_track(track)
                 embed = EmbedBuilder.create_track_added_embed([track])
                 embed.add_field(name="Position in Queue", value=f"{player.get_queue_size()}", inline=True)
@@ -189,6 +193,7 @@ class PlayCog(commands.Cog):
                                     next_track = jingle_results[0]
                             except Exception as jingle_error:
                                 logger.warning(f"Could not load jingle: {jingle_error}")
+                        player.current_requester = getattr(next_track, 'requester', None)
                         await voice_client.play(next_track)
                 return
 
@@ -200,6 +205,7 @@ class PlayCog(commands.Cog):
                 return
 
             track = tracks[0]
+            track.requester = interaction.user
             player.add_track(track)
             embed = EmbedBuilder.create_track_added_embed([track])
             embed.add_field(name="Position in Queue", value=f"{player.get_queue_size()}", inline=True)
@@ -218,6 +224,7 @@ class PlayCog(commands.Cog):
                                 logger.info("Playing jingle before queue start")
                         except Exception as jingle_error:
                             logger.warning(f"Could not load jingle: {jingle_error}")
+                    player.current_requester = getattr(next_track, 'requester', None)
                     await voice_client.play(next_track)
             
         except Exception as e:

@@ -9,6 +9,7 @@ import logging
 import aiohttp
 from utils.embed_builder import EmbedBuilder
 from utils.music_player_view import PlayerController
+from utils.search import MusicSearch
 from config import RADIO_JINGLE_URL, LAVALINK_HOST, LAVALINK_PORT, LAVALINK_PASSWORD
 
 logger = logging.getLogger(__name__)
@@ -58,6 +59,7 @@ class EventsCog(commands.Cog):
             
             if next_track:
                 bot_player.current_track = next_track
+                bot_player.current_requester = getattr(next_track, 'requester', None)
                 
                 # Play the track (on_wavelink_track_start will post the now playing embed)
                 await player.play(next_track)
@@ -67,14 +69,19 @@ class EventsCog(commands.Cog):
                     bot_player.add_track(next_track)
             else:
                 # Queue is empty
+                if bot_player.autoplay and bot_player.current_track:
+                    # Try to find and queue a related track
+                    await self._queue_autoplay_track(player, bot_player)
+                    return
+
                 bot_player.current_track = None
-                
+
                 # Post queue ended message
                 embed = EmbedBuilder.create_info_embed(
                     "📋 Queue Ended",
                     "All tracks have been played!"
                 )
-                
+
                 message_id, channel_id = bot_player.get_controller_message()
                 if message_id and channel_id:
                     try:
@@ -104,6 +111,7 @@ class EventsCog(commands.Cog):
                 return
             
             bot_player.current_track = track
+            bot_player.played_tracks.add(track.uri)
             
             # Post now playing message
             await self.post_now_playing(player, track)
@@ -111,6 +119,44 @@ class EventsCog(commands.Cog):
         except Exception as e:
             logger.error(f"Error in track start event: {e}")
     
+    async def _queue_autoplay_track(self, player: wavelink.Player, bot_player) -> None:
+        """Fetch a related track and play it for autoplay mode."""
+        try:
+            seed_track = bot_player.current_track
+            artist = getattr(seed_track, "author", None) or ""
+            title = getattr(seed_track, "title", None) or ""
+
+            # Build a search query: "Artist mix" gives a good variety of related songs.
+            # Fall back to title-based search if artist is unknown.
+            if artist:
+                query = f"ytsearch:{artist} mix"
+            else:
+                query = f"ytsearch:{title} mix"
+
+            results, _ = await MusicSearch.search(query, search_type="youtube")
+
+            # Pick a result that isn't the same track that just ended and hasn't been played before
+            chosen = None
+            for candidate in results:
+                if candidate.uri != seed_track.uri and candidate.uri not in bot_player.played_tracks:
+                    chosen = candidate
+                    break
+
+            if not chosen and results:
+                chosen = results[0]
+
+            if not chosen:
+                bot_player.current_track = None
+                logger.warning("Autoplay: no related track found")
+                return
+
+            bot_player.current_track = chosen
+            await player.play(chosen)
+            logger.info(f"Autoplay: queued related track '{chosen.title}' by '{chosen.author}'")
+        except Exception as e:
+            logger.error(f"Autoplay error: {e}")
+            bot_player.current_track = None
+
     async def post_now_playing(
         self,
         player: wavelink.Player,
@@ -137,10 +183,17 @@ class EventsCog(commands.Cog):
                 return
             
             # Create now playing embed
+            requester = bot_player.current_requester
+            if requester:
+                req_name = requester.display_name
+                req_avatar = requester.display_avatar.url
+            else:
+                req_name = guild.me.display_name
+                req_avatar = guild.me.avatar.url if guild.me.avatar else None
             embed = EmbedBuilder.create_now_playing(
                 track,
-                author_name=guild.me.name,
-                author_avatar=guild.me.avatar.url if guild.me.avatar else None
+                author_name=req_name,
+                author_avatar=req_avatar
             )
             
             # Create controller view
