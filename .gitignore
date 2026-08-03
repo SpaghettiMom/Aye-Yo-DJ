@@ -59,6 +59,9 @@ logs/
 logs/
 application.yml
 
+# Docker overrides (local customizations)
+docker-compose.override.yml
+
 # VS Code Workspace
 *.code-workspace
 
