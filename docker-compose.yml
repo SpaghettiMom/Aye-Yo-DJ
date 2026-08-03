@@ -5,7 +5,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./application.yml:/opt/Lavalink/application.yml:ro
-      - lavalink_plugins:/opt/Lavalink/plugins
+      - ./plugins:/opt/Lavalink/plugins
     ports:
       - "2333:2333"   # Expose only if you need external access; remove if bot-only
     networks:
@@ -26,6 +26,3 @@ services:
 networks:
   music:
     driver: bridge
-
-volumes:
-  lavalink_plugins:
