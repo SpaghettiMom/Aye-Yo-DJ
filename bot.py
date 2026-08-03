@@ -1,13 +1,14 @@
 """
 Main Discord Music Bot Entry Point
 """
+import asyncio
 import discord
 from discord.ext import commands
 import wavelink
 import os
 import logging
 import json
-from config import DISCORD_TOKEN, LAVALINK_HOST, LAVALINK_PORT, LAVALINK_PASSWORD
+from config import DISCORD_TOKEN, LAVALINK_HOST, LAVALINK_PORT, LAVALINK_PASSWORD, JINGLE_DIR, JINGLE_SERVER_PORT
 
 # Setup logging
 logging.basicConfig(
@@ -17,6 +18,23 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Patch wavelink.Player._dispatch_voice_update to inject channelId required by Lavalink v4
+async def _reconnect_lavalink_node(node) -> None:
+    """Re-establish the websocket connection to Lavalink after a session-expiry 404."""
+    try:
+        logger.info("[Lavalink v4 Fix] Reconnecting node after session expiry (404)…")
+        if node._websocket is not None:
+            try:
+                await node._websocket.cleanup()
+            except Exception:
+                pass
+        node._has_closed = False
+        node._session_id = None
+        await node._connect(client=None)
+        logger.info("[Lavalink v4 Fix] Node reconnect initiated successfully")
+    except Exception as exc:
+        logger.error(f"[Lavalink v4 Fix] Node reconnect failed: {exc}")
+
+
 try:
     from wavelink.player import Player as _WavelinkPlayer
     from wavelink.exceptions import LavalinkException
@@ -51,8 +69,15 @@ try:
 
         try:
             await self.node._update_player(self.guild.id, data=request)
-        except LavalinkException:
-            await self.disconnect()
+        except LavalinkException as exc:
+            if exc.status == 404:
+                # Session is stale (Lavalink restarted) — reconnect the node
+                logger.warning(
+                    f"[Lavalink v4 Fix] Lavalink session expired (404) for guild {self.guild.id}, reconnecting node"
+                )
+                asyncio.create_task(_reconnect_lavalink_node(self.node))
+            else:
+                await self.disconnect()
         else:
             self._connection_event.set()
 
@@ -73,6 +98,9 @@ bot = commands.Bot(command_prefix="/", intents=intents)
 # Store active players
 bot.players = {}
 
+# Jingle toggle — admins can flip this at runtime via /jingle
+bot.jingle_enabled = True
+
 
 async def load_cogs():
     """Load all cogs from the cogs directory"""
@@ -87,6 +115,21 @@ async def load_cogs():
                 logger.info(f"Loaded cog: {filename[:-3]}")
             except Exception as e:
                 logger.error(f"Failed to load cog {filename[:-3]}: {e}")
+
+
+async def start_jingle_server():
+    """Serve local jingle files over HTTP so Lavalink can fetch them."""
+    import aiohttp.web as web
+    if not os.path.exists(JINGLE_DIR):
+        os.makedirs(JINGLE_DIR)
+        logger.info(f"Created jingles directory: {JINGLE_DIR}")
+    app = web.Application()
+    app.router.add_static('/jingles', JINGLE_DIR, show_index=False)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', JINGLE_SERVER_PORT)
+    await site.start()
+    logger.info(f"Jingle file server started on port {JINGLE_SERVER_PORT} serving '{JINGLE_DIR}/'")
 
 
 async def setup_lavalink():
@@ -122,6 +165,11 @@ async def on_ready():
     if not hasattr(bot, 'lavalink_connected'):
         await setup_lavalink()
         bot.lavalink_connected = True
+
+    # Start jingle file server (idempotent)
+    if not hasattr(bot, 'jingle_server_started'):
+        await start_jingle_server()
+        bot.jingle_server_started = True
 
 
 @bot.event

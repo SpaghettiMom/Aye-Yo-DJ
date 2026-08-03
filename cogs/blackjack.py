@@ -23,6 +23,7 @@ from utils.blackjack import (
 )
 from utils import currency
 from utils import leaderboard as lb_store
+from utils import stocks
 
 logger = logging.getLogger(__name__)
 
@@ -189,6 +190,19 @@ class BlackjackCog(commands.Cog):
     def cog_unload(self):
         self._monthly_reset_task.cancel()
 
+    async def _resolve_username(self, guild: discord.Guild, user_id: int) -> str:
+        """Return a display name for user_id, fetching from Discord API if not in guild cache."""
+        member = guild.get_member(user_id)
+        if member:
+            return member.display_name
+        try:
+            user = await self.bot.fetch_user(user_id)
+            return user.display_name
+        except discord.NotFound:
+            return f"Deleted User"
+        except discord.HTTPException:
+            return f"Unknown User"
+
     # -----------------------------------------------------------------------
     # Monthly reset task
     # -----------------------------------------------------------------------
@@ -209,7 +223,7 @@ class BlackjackCog(commands.Cog):
         await self.bot.wait_until_ready()
 
     async def _do_monthly_reset(self, guild: discord.Guild, current_month: str) -> None:
-        """Archive last month's top 10, reset balances, post announcement."""
+        """Liquidate stocks, archive last month's top 10, reset balances, post announcement."""
         # Derive the previous month label
         now = datetime.now(timezone.utc)
         prev_month = (
@@ -217,7 +231,22 @@ class BlackjackCog(commands.Cog):
             else f"{now.year}-{now.month - 1:02d}"
         )
 
-        # Snapshot top 10 before wiping
+        # --- Stock liquidation ---
+        # Credit stock proceeds to each user's balance BEFORE snapshotting
+        try:
+            payouts = await stocks.liquidate_guild_portfolios(guild.id)
+            for user_id_str, pancakes in payouts.items():
+                if pancakes > 0:
+                    currency.add_balance(guild.id, int(user_id_str), pancakes)
+            stocks.clear_guild_portfolios(guild.id)
+            logger.info(
+                f"Liquidated {len(payouts)} portfolio(s) for guild {guild.id} "
+                f"before monthly reset"
+            )
+        except Exception as e:
+            logger.error(f"Stock liquidation failed for guild {guild.id}: {e}")
+
+        # Snapshot top 10 before wiping (balances now include liquidated stock proceeds)
         balances = currency.get_all_guild_balances(guild.id)
         top_entries = sorted(
             [{"user_id": uid, "balance": bal} for uid, bal in balances.items()],
@@ -241,14 +270,16 @@ class BlackjackCog(commands.Cog):
 
         embed = discord.Embed(
             title=f"{PANCAKE} Monthly Results — {prev_month}",
-            description="Balances have been **reset** for the new month. Here's how last month ended!",
+            description=(
+                "All stock holdings were **liquidated** at market price and added to balances.\n"
+                "Balances have been **reset** for the new month. Here's how last month ended!"
+            ),
             color=0xFFD700,
         )
         if top_entries:
             lines = []
             for i, entry in enumerate(top_entries):
-                member = guild.get_member(int(entry["user_id"]))
-                name = member.display_name if member else f"User {entry['user_id']}"
+                name = await self._resolve_username(guild, int(entry["user_id"]))
                 medal = MEDALS[i] if i < 3 else f"{i + 1}."
                 lines.append(f"{medal} **{name}** — {PANCAKE} {entry['balance']:,}")
             embed.add_field(name="Final Standings", value="\n".join(lines), inline=False)
@@ -353,8 +384,7 @@ class BlackjackCog(commands.Cog):
             current_sorted = sorted(balances.items(), key=lambda x: x[1], reverse=True)[:10]
             lines = []
             for i, (uid, bal) in enumerate(current_sorted):
-                member = guild.get_member(int(uid))
-                name = member.display_name if member else f"User {uid}"
+                name = await self._resolve_username(guild, int(uid))
                 medal = MEDALS[i] if i < 3 else f"{i + 1}."
                 lines.append(f"{medal} **{name}** — {PANCAKE} {bal:,}")
             embed.add_field(name=f"📅 This Month ({current_month})", value="\n".join(lines), inline=False)
@@ -366,8 +396,7 @@ class BlackjackCog(commands.Cog):
         if prev_entries:
             lines = []
             for i, entry in enumerate(prev_entries):
-                member = guild.get_member(int(entry["user_id"]))
-                name = member.display_name if member else f"User {entry['user_id']}"
+                name = await self._resolve_username(guild, int(entry["user_id"]))
                 medal = MEDALS[i] if i < 3 else f"{i + 1}."
                 lines.append(f"{medal} **{name}** — {PANCAKE} {entry['balance']:,}")
             embed.add_field(name=f"🏆 Last Month ({prev_month})", value="\n".join(lines), inline=False)

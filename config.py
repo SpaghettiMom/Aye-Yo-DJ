@@ -24,7 +24,14 @@ SPOTIFY_REFRESH_TOKEN = os.getenv("SPOTIFY_REFRESH_TOKEN")
 DEFAULT_VOLUME = 100
 MAX_QUEUE_SIZE = 1000
 SEARCH_RESULTS_COUNT = 5
-RADIO_JINGLE_URL = "https://www.youtube.com/watch?v=yx28m-M--4Q"
+RADIO_JINGLE_URL = ""  # Legacy — replaced by local jingle files
+
+# Jingle file server settings
+# Drop MP3/WAV/OGG/FLAC files into the jingles/ folder and set JINGLE_SERVER_HOST
+# to this machine's LAN IP (the address Lavalink can reach the bot on).
+JINGLE_DIR = os.getenv("JINGLE_DIR", "jingles")
+JINGLE_SERVER_HOST = os.getenv("JINGLE_SERVER_HOST", "")  # e.g. 192.168.1.10
+JINGLE_SERVER_PORT = int(os.getenv("JINGLE_SERVER_PORT", "8765"))
 
 # Colors for embeds
 COLORS = {

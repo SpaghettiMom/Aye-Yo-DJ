@@ -10,7 +10,7 @@ import aiohttp
 from utils.embed_builder import EmbedBuilder
 from utils.music_player_view import PlayerController
 from utils.search import MusicSearch
-from config import RADIO_JINGLE_URL, LAVALINK_HOST, LAVALINK_PORT, LAVALINK_PASSWORD
+from config import LAVALINK_HOST, LAVALINK_PORT, LAVALINK_PASSWORD, JINGLE_SERVER_HOST, JINGLE_SERVER_PORT
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +33,42 @@ class EventsCog(commands.Cog):
         logger.info(f"Wavelink node is ready")
     
     @commands.Cog.listener()
+    async def on_wavelink_track_exception(self, payload) -> None:
+        """Handle track exception event — fired when Lavalink fails to load/stream a track."""
+        try:
+            exc = payload.exception
+            track_title = getattr(payload.track, 'title', 'unknown')
+            logger.error(
+                f"Track exception for '{track_title}': "
+                f"{exc.get('message', 'unknown')} (severity={exc.get('severity', '?')}, "
+                f"cause={exc.get('cause', '?')})"
+            )
+            player: wavelink.Player = payload.player
+            if not player or not player.guild:
+                return
+            bot_player = self.bot.players.get(player.guild.id)
+            if not bot_player:
+                return
+            # Don't post an error for jingle tracks — their failure is handled silently
+            from config import JINGLE_SERVER_HOST, JINGLE_SERVER_PORT
+            jingle_uri = getattr(payload.track, 'uri', '')
+            if JINGLE_SERVER_HOST and jingle_uri and f"{JINGLE_SERVER_HOST}:{JINGLE_SERVER_PORT}/jingles/" in jingle_uri:
+                return
+            channel = None
+            for text_channel in player.guild.text_channels:
+                if text_channel.permissions_for(player.guild.me).send_messages:
+                    channel = text_channel
+                    break
+            if channel:
+                embed = EmbedBuilder.create_error_embed(
+                    f"Failed to play **{track_title}**. "
+                    f"YouTube may be blocking this request. Try again or pick a different song."
+                )
+                await channel.send(embed=embed)
+        except Exception as e:
+            logger.error(f"Error in track exception event: {e}")
+
+    @commands.Cog.listener()
     async def on_wavelink_track_end(self, payload) -> None:
         """Handle track end event"""
         try:
@@ -40,20 +76,38 @@ class EventsCog(commands.Cog):
             
             if not player:
                 return
-            
+
+            reason: str = getattr(payload, "reason", "finished")
+            logger.debug(f"Track ended: reason={reason}, track={getattr(payload.track, 'title', 'unknown')}")
+
             # Get the bot's player
             bot_player = self.bot.players.get(player.guild.id)
-            
+
             if not bot_player:
                 return
-            
+
+            # loadFailed means Lavalink couldn't stream the audio — skip to next track
+            # (on_wavelink_track_exception already sent an error embed for non-jingle tracks)
+            if reason == "loadFailed":
+                logger.warning(
+                    f"Track '{getattr(payload.track, 'title', 'unknown')}' failed to load/stream, skipping to next."
+                )
+                next_track = bot_player.next_track()
+                if next_track:
+                    bot_player.current_track = next_track
+                    bot_player.current_requester = getattr(next_track, 'requester', None)
+                    await player.play(next_track)
+                else:
+                    bot_player.current_track = None
+                return
+
             # Handle loop modes
             if bot_player.loop_mode == "one":
                 # Replay current track
                 if bot_player.current_track:
                     await player.play(bot_player.current_track)
                     return
-            
+
             # Get next track from queue
             next_track = bot_player.next_track()
             

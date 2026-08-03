@@ -6,12 +6,15 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 import wavelink
+from wavelink.exceptions import LavalinkException
 import logging
-from typing import List
+import os
+import random
+from typing import List, Optional
 from utils.search import MusicSearch
 from utils.embed_builder import EmbedBuilder
 from utils.player import MusicPlayer
-from config import RADIO_JINGLE_URL
+from config import JINGLE_DIR, JINGLE_SERVER_HOST, JINGLE_SERVER_PORT
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +31,21 @@ class PlayCog(commands.Cog):
             self.bot.players[guild_id] = MusicPlayer(guild_id)
         return self.bot.players[guild_id]
 
+    def _random_jingle_url(self) -> Optional[str]:
+        """Pick a random jingle file from the jingles directory and return its HTTP URL."""
+        if not JINGLE_SERVER_HOST or not JINGLE_DIR:
+            return None
+        try:
+            files = [
+                f for f in os.listdir(JINGLE_DIR)
+                if f.lower().endswith(('.mp3', '.wav', '.ogg', '.flac'))
+            ]
+            if not files:
+                return None
+            return f"http://{JINGLE_SERVER_HOST}:{JINGLE_SERVER_PORT}/jingles/{random.choice(files)}"
+        except Exception:
+            return None
+
     async def query_autocomplete(
         self,
         interaction: discord.Interaction,
@@ -36,14 +54,18 @@ class PlayCog(commands.Cog):
         if not current or len(current) < 2:
             return []
         try:
-            suggestions = await MusicSearch.get_suggestions(current, limit=6)
-            choices = []
-            for s in suggestions:
-                label = f"{s['title']} - {s['artist']}"
-                choices.append(
-                    app_commands.Choice(name=label[:100], value=s['url'])
-                )
-            return choices
+            import aiohttp
+            url = "https://suggestqueries.google.com/complete/search"
+            params = {"client": "firefox", "ds": "yt", "q": current}
+            timeout = aiohttp.ClientTimeout(total=2.5)
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, params=params, timeout=timeout) as resp:
+                    data = await resp.json(content_type=None)
+            suggestions = data[1][:6]
+            return [
+                app_commands.Choice(name=s[:100], value=s[:100])
+                for s in suggestions
+            ]
         except Exception:
             return []
 
@@ -157,9 +179,10 @@ class PlayCog(commands.Cog):
                     if not voice_client.playing:
                         next_track = player.next_track()
                         if next_track:
-                            if not player.jingle_played and RADIO_JINGLE_URL:
+                            jingle_url = self._random_jingle_url()
+                            if not player.jingle_played and jingle_url and self.bot.jingle_enabled:
                                 try:
-                                    jingle_results, _ = await MusicSearch.search(RADIO_JINGLE_URL)
+                                    jingle_results, _ = await MusicSearch.search(jingle_url)
                                     if jingle_results:
                                         player.jingle_played = True
                                         player.queue.appendleft(next_track)
@@ -184,9 +207,10 @@ class PlayCog(commands.Cog):
                 if not voice_client.playing:
                     next_track = player.next_track()
                     if next_track:
-                        if not player.jingle_played and RADIO_JINGLE_URL:
+                        jingle_url = self._random_jingle_url()
+                        if not player.jingle_played and jingle_url and self.bot.jingle_enabled:
                             try:
-                                jingle_results, _ = await MusicSearch.search(RADIO_JINGLE_URL)
+                                jingle_results, _ = await MusicSearch.search(jingle_url)
                                 if jingle_results:
                                     player.jingle_played = True
                                     player.queue.appendleft(next_track)
@@ -214,9 +238,10 @@ class PlayCog(commands.Cog):
             if not voice_client.playing:
                 next_track = player.next_track()
                 if next_track:
-                    if not player.jingle_played and RADIO_JINGLE_URL:
+                    jingle_url = self._random_jingle_url()
+                    if not player.jingle_played and jingle_url and self.bot.jingle_enabled:
                         try:
-                            jingle_results, _ = await MusicSearch.search(RADIO_JINGLE_URL)
+                            jingle_results, _ = await MusicSearch.search(jingle_url)
                             if jingle_results:
                                 player.jingle_played = True
                                 player.queue.appendleft(next_track)
@@ -227,6 +252,16 @@ class PlayCog(commands.Cog):
                     player.current_requester = getattr(next_track, 'requester', None)
                     await voice_client.play(next_track)
             
+        except LavalinkException as exc:
+            if exc.status == 404:
+                logger.warning(f"Play command: Lavalink session expired (404), node is reconnecting")
+                embed = EmbedBuilder.create_error_embed(
+                    "The Lavalink connection was lost and is reconnecting. Please try again in a moment."
+                )
+            else:
+                logger.error(f"Play command Lavalink error: {exc}")
+                embed = EmbedBuilder.create_error_embed(f"Lavalink error ({exc.status}): {exc.error}")
+            await interaction.followup.send(embed=embed)
         except Exception as e:
             logger.error(f"Play command error: {e}")
             embed = EmbedBuilder.create_error_embed(f"Error: {str(e)}")
