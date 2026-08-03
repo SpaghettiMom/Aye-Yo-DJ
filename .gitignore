@@ -57,6 +57,10 @@ logs/
 
 # Lavalink
 logs/
+application.yml
+
+# VS Code Workspace
+*.code-workspace
 
 # Testing
 .pytest_cache/
