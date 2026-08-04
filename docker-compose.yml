@@ -20,6 +20,8 @@ services:
       - lavalink
     volumes:
       - ./jingles:/app/jingles
+    ports:
+      - "8765:8765"
     networks:
       - music
 
