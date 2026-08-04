@@ -10,6 +10,7 @@ from wavelink.exceptions import LavalinkException
 import logging
 import os
 import random
+from urllib.parse import quote
 from typing import List, Optional
 from utils.search import MusicSearch
 from utils.embed_builder import EmbedBuilder
@@ -42,7 +43,7 @@ class PlayCog(commands.Cog):
             ]
             if not files:
                 return None
-            return f"http://{JINGLE_SERVER_HOST}:{JINGLE_SERVER_PORT}/jingles/{random.choice(files)}"
+            return f"http://{JINGLE_SERVER_HOST}:{JINGLE_SERVER_PORT}/jingles/{quote(random.choice(files))}"
         except Exception:
             return None
 
