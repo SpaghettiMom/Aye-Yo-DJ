@@ -3,12 +3,22 @@ Main Discord Music Bot Entry Point
 """
 import asyncio
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 import wavelink
 import os
 import logging
 import json
-from config import DISCORD_TOKEN, LAVALINK_HOST, LAVALINK_PORT, LAVALINK_PASSWORD, JINGLE_DIR, JINGLE_SERVER_PORT
+import aiohttp
+from config import (
+    DISCORD_TOKEN,
+    LAVALINK_HOST,
+    LAVALINK_PORT,
+    LAVALINK_PASSWORD,
+    JINGLE_DIR,
+    JINGLE_SERVER_PORT,
+    POTOKEN_GENERATOR_URL,
+    POTOKEN_REFRESH_INTERVAL_MINUTES,
+)
 
 # Setup logging
 logging.basicConfig(
@@ -146,6 +156,38 @@ async def setup_lavalink():
         logger.error(f"Failed to connect to Lavalink: {e}", exc_info=True)
 
 
+@tasks.loop(minutes=POTOKEN_REFRESH_INTERVAL_MINUTES)
+async def refresh_potoken_task():
+    """Fetch a fresh poToken/visitorData from the potoken-generator service and
+    push it to Lavalink's youtube-source plugin over its REST API, so tokens
+    never go stale without needing to restart Lavalink."""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"{POTOKEN_GENERATOR_URL}/token", timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                if resp.status != 200:
+                    logger.warning(f"[PoToken] Generator not ready yet (status {resp.status})")
+                    return
+                data = await resp.json(content_type=None)
+
+            po_token = data.get("potoken")
+            visitor_data = data.get("visitor_data")
+            if not po_token or not visitor_data:
+                logger.warning("[PoToken] Generator response missing potoken/visitor_data")
+                return
+
+            headers = {"Authorization": LAVALINK_PASSWORD, "Content-Type": "application/json"}
+            payload = {"poToken": po_token, "visitorData": visitor_data}
+            url = f"http://{LAVALINK_HOST}:{LAVALINK_PORT}/youtube"
+            async with session.post(url, headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                if resp.status == 204:
+                    logger.info("[PoToken] Refreshed poToken/visitorData on Lavalink")
+                else:
+                    body = await resp.text()
+                    logger.warning(f"[PoToken] Lavalink rejected update (status {resp.status}): {body}")
+    except Exception as e:
+        logger.error(f"[PoToken] Failed to refresh poToken: {e}")
+
+
 @bot.event
 async def on_ready():
     """Bot ready event"""
@@ -170,6 +212,10 @@ async def on_ready():
     if not hasattr(bot, 'jingle_server_started'):
         await start_jingle_server()
         bot.jingle_server_started = True
+
+    # Start automatic poToken refresh loop (idempotent)
+    if not refresh_potoken_task.is_running():
+        refresh_potoken_task.start()
 
 
 @bot.event
