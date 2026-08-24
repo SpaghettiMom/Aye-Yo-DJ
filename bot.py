@@ -158,21 +158,26 @@ async def setup_lavalink():
 
 @tasks.loop(minutes=POTOKEN_REFRESH_INTERVAL_MINUTES)
 async def refresh_potoken_task():
-    """Fetch a fresh poToken/visitorData from the potoken-generator service and
-    push it to Lavalink's youtube-source plugin over its REST API, so tokens
+    """Fetch a fresh poToken/visitorData from the bgutil-ytdlp-pot-provider service
+    and push it to Lavalink's youtube-source plugin over its REST API, so tokens
     never go stale without needing to restart Lavalink."""
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(f"{POTOKEN_GENERATOR_URL}/token", timeout=aiohttp.ClientTimeout(total=15)) as resp:
+            async with session.post(
+                f"{POTOKEN_GENERATOR_URL}/get_pot",
+                json={},
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as resp:
                 if resp.status != 200:
-                    logger.warning(f"[PoToken] Generator not ready yet (status {resp.status})")
+                    body = await resp.text()
+                    logger.warning(f"[PoToken] Generator not ready yet (status {resp.status}): {body}")
                     return
                 data = await resp.json(content_type=None)
 
-            po_token = data.get("potoken")
-            visitor_data = data.get("visitor_data")
+            po_token = data.get("poToken")
+            visitor_data = data.get("contentBinding")
             if not po_token or not visitor_data:
-                logger.warning("[PoToken] Generator response missing potoken/visitor_data")
+                logger.warning("[PoToken] Generator response missing poToken/contentBinding")
                 return
 
             headers = {"Authorization": LAVALINK_PASSWORD, "Content-Type": "application/json"}

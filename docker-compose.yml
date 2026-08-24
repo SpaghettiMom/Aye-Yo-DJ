@@ -13,12 +13,17 @@ services:
 
   # Generates YouTube poTokens (proof-of-origin tokens) used by the youtube-source
   # Lavalink plugin to reduce "Sign in to confirm you're not a bot" errors.
+  # NOTE (Aug 2026): switched from iv-org/youtube-trusted-session-generator (dead
+  # upstream — YouTube changed BotGuard handling, tool permanently times out) to
+  # Brainicism/bgutil-ytdlp-pot-provider, which is actively maintained and uses a
+  # working BotGuard implementation (LuanRT/BgUtils). API shape differs — see
+  # bot.py's refresh_potoken_task (POST /get_pot instead of GET /token).
   potoken-generator:
-    image: quay.io/invidious/youtube-trusted-session-generator:webserver
+    image: brainicism/bgutil-ytdlp-pot-provider
     container_name: potoken-generator
     restart: unless-stopped
     ports:
-      - "8090:8080"   # Published so the bot can reach it even when run outside Docker (via localhost:8090)
+      - "8090:4416"   # Published so the bot can reach it even when run outside Docker (via localhost:8090)
     networks:
       - music
 

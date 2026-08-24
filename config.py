@@ -15,10 +15,11 @@ LAVALINK_HOST = os.getenv("LAVALINK_HOST", "localhost")
 LAVALINK_PORT = int(os.getenv("LAVALINK_PORT", 2333))
 LAVALINK_PASSWORD = os.getenv("LAVALINK_PASSWORD", "youshallnotpass")
 
-# poToken generator (see docker-compose.yml "potoken-generator" service).
+# poToken generator (see docker-compose.yml "potoken-generator" service, backed by
+# Brainicism/bgutil-ytdlp-pot-provider on port 4416).
 # The bot polls this service and pushes fresh poToken/visitorData values to
 # Lavalink's youtube-source plugin via its REST API, so tokens never go stale.
-POTOKEN_GENERATOR_URL = os.getenv("POTOKEN_GENERATOR_URL", "http://potoken-generator:8080")
+POTOKEN_GENERATOR_URL = os.getenv("POTOKEN_GENERATOR_URL", "http://potoken-generator:4416")
 POTOKEN_REFRESH_INTERVAL_MINUTES = int(os.getenv("POTOKEN_REFRESH_INTERVAL_MINUTES", "30"))
 
 # Spotify Settings
