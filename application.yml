@@ -37,8 +37,8 @@ lavalink:
     gc-warnings: true
 
   plugins:
-    - dependency: "dev.lavalink.youtube:youtube-plugin:1.18.2"
-      snapshot: false
+    - dependency: "dev.lavalink.youtube:youtube-plugin:2be8e542d3f6f178e048dca565892684c2e40177"
+      snapshot: true
 
 plugins:
   youtube:
@@ -48,31 +48,22 @@ plugins:
     allowDirectPlaylistIds: true
     clients:
       - MUSIC
+      - TV
       - ANDROID_VR
       - WEB
       - WEBEMBEDDED
-      - MWEB
-      - TVHTML5_SIMPLY
-      - TV
     # OAuth lets youtube-source authenticate as a real signed-in account, which is
     # the only mechanism with real age/login-restriction bypass (also required for
-    # the TV client above). On first Lavalink start with no refreshToken below, watch
-    # the logs for a https://www.google.com/device link + code — open it once with a
-    # burner Google account, then paste the printed refreshToken here so future
-    # restarts skip the login flow.
+    # the TV client above).
     oauth:
       enabled: true
-      # refreshToken: "paste your refresh token here once you have one"
-    # poToken ("Proof of Origin Token") for the WEB/WEBEMBEDDED clients.
-    # Not needed when using OAuth, left inert as a harmless fallback. The bot
-    # refreshes these automatically at runtime via Lavalink's REST API
-    # (POST /youtube) using the potoken-generator service
-    # (Brainicism/bgutil-ytdlp-pot-provider). See docker-compose.yml
-    # (potoken-generator) and bot.py (refresh_potoken_task).
-    pot:
-      token: ""
-      visitorData: ""
-    
+      refreshToken: ""
+    # Remote cipher server handles signature/n-param deciphering when YouTube's
+    # player scripts change faster than local extraction logic can keep up.
+    # See docker-compose.yml (yt-cipher service, kikkia/yt-cipher).
+    remoteCipher:
+      url: "http://host.docker.internal:8001"
+
 metrics:
   prometheus:
     enabled: false

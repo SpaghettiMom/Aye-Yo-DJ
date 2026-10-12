@@ -243,6 +243,13 @@ class MusicSearch:
             Tuple of (list of Playable objects, source platform)
         """
         try:
+            explicit_prefixes = ("ytsearch:", "ytmsearch:", "scsearch:", "spsearch:")
+            lower_query = query.lower()
+            for prefix in explicit_prefixes:
+                if lower_query.startswith(prefix):
+                    results = await wavelink.Playable.search(query, source=None)
+                    return results, prefix[:-1]
+
             # If the query is a URL or a native Spotify/SoundCloud URI, handle it
             if (query.startswith("http://") or query.startswith("https://")
                     or query.startswith("spotify:") or query.startswith("soundcloud:")):
@@ -257,7 +264,7 @@ class MusicSearch:
                     yt_query = await resolve_spotify_url(query)
                     if yt_query:
                         logger.info(f"Spotify track resolved to YouTube query: {yt_query!r}")
-                        results = await wavelink.Playable.search(f"ytsearch:{yt_query}")
+                        results = await wavelink.Playable.search(f"ytsearch:{yt_query}", source=None)
                         return results, "spotify"
                     # Credentials not configured – fall through to direct Lavalink search
                     # (strip tracking params first)
@@ -267,19 +274,26 @@ class MusicSearch:
                 results = await wavelink.Playable.search(query)
                 return results, "url"
 
-            if search_type.lower() in ["spotify", "spsearch"]:
+            normalized_search_type = search_type.lower()
+
+            if normalized_search_type in ["spotify", "spsearch"]:
                 search_source = "spsearch"
-            elif search_type.lower() == "youtube":
+            elif normalized_search_type == "youtube":
                 search_source = "ytsearch"
-            elif search_type.lower() == "soundcloud":
+            elif normalized_search_type == "soundcloud":
                 search_source = "scsearch"
             else:
                 search_source = "ytsearch"
 
+            # Prefer YouTube Music search for plain music queries because it often
+            # surfaces less restricted matches than the top regular YouTube result.
+            if normalized_search_type == "youtube":
+                results = await wavelink.Playable.search(f"ytmsearch:{query}", source=None)
+                if results:
+                    return results, "ytmsearch"
+
             # Perform search
-            results = await wavelink.Playable.search(
-                f"{search_source}:{query}"
-            )
+            results = await wavelink.Playable.search(f"{search_source}:{query}", source=None)
 
             return results, search_source
         except Exception as e:
@@ -361,7 +375,7 @@ class MusicSearch:
                 async def _resolve_one(q: str) -> Optional[wavelink.Playable]:
                     async with sem:
                         try:
-                            results = await wavelink.Playable.search(f"ytsearch:{q}")
+                            results = await wavelink.Playable.search(f"ytsearch:{q}", source=None)
                             return results[0] if results else None
                         except Exception as err:
                             logger.warning(f"Failed to resolve track '{q}': {err}")

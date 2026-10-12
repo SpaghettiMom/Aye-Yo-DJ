@@ -10,6 +10,7 @@ from wavelink.exceptions import LavalinkException
 import logging
 import os
 import random
+import aiohttp
 from urllib.parse import quote
 from typing import List, Optional
 from utils.search import MusicSearch
@@ -25,6 +26,19 @@ class PlayCog(commands.Cog):
     
     def __init__(self, bot):
         self.bot = bot
+        self._autocomplete_session: Optional[aiohttp.ClientSession] = None
+
+    async def cog_unload(self) -> None:
+        """Clean up the shared autocomplete HTTP session when the cog unloads"""
+        if self._autocomplete_session and not self._autocomplete_session.closed:
+            await self._autocomplete_session.close()
+
+    def _get_autocomplete_session(self) -> aiohttp.ClientSession:
+        """Lazily create a single reusable session to avoid per-request setup latency,
+        which can otherwise push autocomplete responses past Discord's 3s window."""
+        if self._autocomplete_session is None or self._autocomplete_session.closed:
+            self._autocomplete_session = aiohttp.ClientSession()
+        return self._autocomplete_session
     
     async def get_or_create_player(self, guild_id: int) -> MusicPlayer:
         """Get or create a player for the guild"""
@@ -55,13 +69,12 @@ class PlayCog(commands.Cog):
         if not current or len(current) < 2:
             return []
         try:
-            import aiohttp
             url = "https://suggestqueries.google.com/complete/search"
             params = {"client": "firefox", "ds": "yt", "q": current}
-            timeout = aiohttp.ClientTimeout(total=2.5)
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, params=params, timeout=timeout) as resp:
-                    data = await resp.json(content_type=None)
+            timeout = aiohttp.ClientTimeout(total=1.5)
+            session = self._get_autocomplete_session()
+            async with session.get(url, params=params, timeout=timeout) as resp:
+                data = await resp.json(content_type=None)
             suggestions = data[1][:6]
             return [
                 app_commands.Choice(name=s[:100], value=s[:100])
@@ -86,7 +99,14 @@ class PlayCog(commands.Cog):
         source: str = "youtube"
     ):
         """Play a song"""
-        await interaction.response.defer()
+        try:
+            await interaction.response.defer()
+        except discord.NotFound:
+            logger.warning("Play command: interaction expired before it could be deferred (client was too slow to respond).")
+            return
+        except discord.HTTPException as e:
+            logger.warning(f"Play command: failed to defer interaction: {e}")
+            return
         
         # Check if user is in voice channel
         if not interaction.user.voice:

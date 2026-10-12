@@ -3,12 +3,12 @@ Main Discord Music Bot Entry Point
 """
 import asyncio
 import discord
-from discord.ext import commands, tasks
+from discord.ext import commands
 import wavelink
+from wavelink.exceptions import LavalinkException
 import os
 import logging
 import json
-import aiohttp
 from config import (
     DISCORD_TOKEN,
     LAVALINK_HOST,
@@ -16,8 +16,6 @@ from config import (
     LAVALINK_PASSWORD,
     JINGLE_DIR,
     JINGLE_SERVER_PORT,
-    POTOKEN_GENERATOR_URL,
-    POTOKEN_REFRESH_INTERVAL_MINUTES,
 )
 
 # Setup logging
@@ -27,74 +25,60 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Patch wavelink.Player._dispatch_voice_update to inject channelId required by Lavalink v4
-async def _reconnect_lavalink_node(node) -> None:
-    """Re-establish the websocket connection to Lavalink after a session-expiry 404."""
-    try:
-        logger.info("[Lavalink v4 Fix] Reconnecting node after session expiry (404)…")
-        if node._websocket is not None:
-            try:
-                await node._websocket.cleanup()
-            except Exception:
-                pass
-        node._has_closed = False
-        node._session_id = None
-        await node._connect(client=None)
-        logger.info("[Lavalink v4 Fix] Node reconnect initiated successfully")
-    except Exception as exc:
-        logger.error(f"[Lavalink v4 Fix] Node reconnect failed: {exc}")
 
+async def _dispatch_voice_update_with_channel_id(self: wavelink.Player) -> None:
+    """Send the Lavalink v4 voice payload required by Lavalink 4.2.2.
 
-try:
-    from wavelink.player import Player as _WavelinkPlayer
-    from wavelink.exceptions import LavalinkException
-    _original_dispatch = _WavelinkPlayer._dispatch_voice_update
+    Wavelink 3.4.1 omits ``channelId``, while the Lavalink server used by this
+    project requires it for every voice update.
+    """
+    assert self.guild is not None
 
-    async def _patched_dispatch_voice_update(self):
-        """Inject channelId into the voice state payload before sending to Lavalink v4"""
-        assert self.guild is not None
-        data = self._voice_state["voice"]
+    voice = self._voice_state["voice"]
+    session_id = voice.get("session_id")
+    token = voice.get("token")
+    endpoint = voice.get("endpoint")
+    channel_id = getattr(self.channel, "id", None)
 
-        session_id = data.get("session_id")
-        token = data.get("token")
-        endpoint = data.get("endpoint")
+    if not session_id or not token or not endpoint or not channel_id:
+        logger.debug(
+            "Waiting for complete Discord voice state for guild %s "
+            "(session=%s, token=%s, endpoint=%s, channel=%s)",
+            self.guild.id,
+            bool(session_id),
+            bool(token),
+            bool(endpoint),
+            bool(channel_id),
+        )
+        return
 
-        if not session_id or not token or not endpoint:
-            return
-
-        channel_id = str(self.channel.id) if self.channel else None
-        if not channel_id:
-            logger.warning("[Lavalink v4 Fix] channelId unavailable, cannot dispatch voice update")
-            return
-
-        request = {
-            "voice": {
-                "sessionId": session_id,
-                "token": token,
-                "endpoint": endpoint,
-                "channelId": channel_id,
-            }
+    request = {
+        "voice": {
+            "sessionId": session_id,
+            "token": token,
+            "endpoint": endpoint,
+            "channelId": str(channel_id),
         }
-        logger.debug(f"[Lavalink v4 Fix] Injecting channelId {channel_id} for guild {self.guild.id}")
+    }
 
-        try:
-            await self.node._update_player(self.guild.id, data=request)
-        except LavalinkException as exc:
-            if exc.status == 404:
-                # Session is stale (Lavalink restarted) — reconnect the node
-                logger.warning(
-                    f"[Lavalink v4 Fix] Lavalink session expired (404) for guild {self.guild.id}, reconnecting node"
-                )
-                asyncio.create_task(_reconnect_lavalink_node(self.node))
-            else:
-                await self.disconnect()
-        else:
-            self._connection_event.set()
+    try:
+        await self.node._update_player(self.guild.id, data=request)
+    except LavalinkException as exc:
+        logger.error(
+            "Lavalink rejected the voice update for guild %s: %s",
+            self.guild.id,
+            exc,
+        )
+        await self.disconnect()
+        return
 
-    _WavelinkPlayer._dispatch_voice_update = _patched_dispatch_voice_update
-    logger.info("Applied Lavalink v4 compatibility patch: channelId injection into voice update")
-except Exception as e:
-    logger.warning(f"Could not apply Lavalink compatibility patch: {e}")
+    self._connection_event.set()
+    logger.info("Sent Lavalink voice update with channelId for guild %s", self.guild.id)
+
+
+# Lavalink 4.2.2 requires voice.channelId; Wavelink 3.4.1 does not send it.
+wavelink.Player._dispatch_voice_update = _dispatch_voice_update_with_channel_id
+logger.info("Applied Lavalink 4.2.2 voice channelId compatibility patch")
 
 # Create bot with intents
 intents = discord.Intents.default()
@@ -156,43 +140,6 @@ async def setup_lavalink():
         logger.error(f"Failed to connect to Lavalink: {e}", exc_info=True)
 
 
-@tasks.loop(minutes=POTOKEN_REFRESH_INTERVAL_MINUTES)
-async def refresh_potoken_task():
-    """Fetch a fresh poToken/visitorData from the bgutil-ytdlp-pot-provider service
-    and push it to Lavalink's youtube-source plugin over its REST API, so tokens
-    never go stale without needing to restart Lavalink."""
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                f"{POTOKEN_GENERATOR_URL}/get_pot",
-                json={},
-                timeout=aiohttp.ClientTimeout(total=30),
-            ) as resp:
-                if resp.status != 200:
-                    body = await resp.text()
-                    logger.warning(f"[PoToken] Generator not ready yet (status {resp.status}): {body}")
-                    return
-                data = await resp.json(content_type=None)
-
-            po_token = data.get("poToken")
-            visitor_data = data.get("contentBinding")
-            if not po_token or not visitor_data:
-                logger.warning("[PoToken] Generator response missing poToken/contentBinding")
-                return
-
-            headers = {"Authorization": LAVALINK_PASSWORD, "Content-Type": "application/json"}
-            payload = {"poToken": po_token, "visitorData": visitor_data}
-            url = f"http://{LAVALINK_HOST}:{LAVALINK_PORT}/youtube"
-            async with session.post(url, headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-                if resp.status == 204:
-                    logger.info("[PoToken] Refreshed poToken/visitorData on Lavalink")
-                else:
-                    body = await resp.text()
-                    logger.warning(f"[PoToken] Lavalink rejected update (status {resp.status}): {body}")
-    except Exception as e:
-        logger.error(f"[PoToken] Failed to refresh poToken: {e}")
-
-
 @bot.event
 async def on_ready():
     """Bot ready event"""
@@ -217,10 +164,6 @@ async def on_ready():
     if not hasattr(bot, 'jingle_server_started'):
         await start_jingle_server()
         bot.jingle_server_started = True
-
-    # Start automatic poToken refresh loop (idempotent)
-    if not refresh_potoken_task.is_running():
-        refresh_potoken_task.start()
 
 
 @bot.event

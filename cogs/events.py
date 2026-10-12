@@ -21,6 +21,13 @@ class EventsCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self._voice_updates = {}  # Track pending voice updates
+
+    def _get_notification_channel(self, guild: discord.Guild) -> discord.TextChannel | None:
+        """Find the first writable text channel for status messages."""
+        for text_channel in guild.text_channels:
+            if text_channel.permissions_for(guild.me).send_messages:
+                return text_channel
+        return None
     
     @commands.Cog.listener()
     async def on_connect(self):
@@ -54,17 +61,6 @@ class EventsCog(commands.Cog):
             jingle_uri = getattr(payload.track, 'uri', '')
             if JINGLE_SERVER_HOST and jingle_uri and f"{JINGLE_SERVER_HOST}:{JINGLE_SERVER_PORT}/jingles/" in jingle_uri:
                 return
-            channel = None
-            for text_channel in player.guild.text_channels:
-                if text_channel.permissions_for(player.guild.me).send_messages:
-                    channel = text_channel
-                    break
-            if channel:
-                embed = EmbedBuilder.create_error_embed(
-                    f"Failed to play **{track_title}**. "
-                    f"YouTube may be blocking this request. Try again or pick a different song."
-                )
-                await channel.send(embed=embed)
         except Exception as e:
             logger.error(f"Error in track exception event: {e}")
 
@@ -92,6 +88,10 @@ class EventsCog(commands.Cog):
                 logger.warning(
                     f"Track '{getattr(payload.track, 'title', 'unknown')}' failed to load/stream, skipping to next."
                 )
+                failed_uri = getattr(payload.track, 'uri', None)
+                if failed_uri:
+                    bot_player.failed_track_uris.add(failed_uri)
+
                 next_track = bot_player.next_track()
                 if next_track:
                     bot_player.current_track = next_track
@@ -99,6 +99,14 @@ class EventsCog(commands.Cog):
                     await player.play(next_track)
                 else:
                     bot_player.current_track = None
+
+                channel = self._get_notification_channel(player.guild)
+                if channel:
+                    embed = EmbedBuilder.create_error_embed(
+                        f"Failed to play **{getattr(payload.track, 'title', 'that track')}**. "
+                        f"YouTube blocked the available stream variants for this result."
+                    )
+                    await channel.send(embed=embed)
                 return
 
             # Handle loop modes

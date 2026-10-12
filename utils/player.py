@@ -25,6 +25,7 @@ class MusicPlayer:
         self.jingle_played = False
         self.autoplay = False
         self.played_tracks = set()  # Track URIs of played tracks to avoid repeats
+        self.failed_track_uris = set()  # Track URIs that failed to stream for this session
         self.current_requester = None  # discord.Member who requested the current track
     
     def add_track(self, track: wavelink.Playable) -> bool:
@@ -177,4 +178,5 @@ class MusicPlayer:
         self.current_message_id = None
         self.current_channel_id = None
         self.played_tracks.clear()
+        self.failed_track_uris.clear()
         self.current_requester = None

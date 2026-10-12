@@ -11,19 +11,16 @@ services:
     networks:
       - music
 
-  # Generates YouTube poTokens (proof-of-origin tokens) used by the youtube-source
-  # Lavalink plugin to reduce "Sign in to confirm you're not a bot" errors.
-  # NOTE (Aug 2026): switched from iv-org/youtube-trusted-session-generator (dead
-  # upstream — YouTube changed BotGuard handling, tool permanently times out) to
-  # Brainicism/bgutil-ytdlp-pot-provider, which is actively maintained and uses a
-  # working BotGuard implementation (LuanRT/BgUtils). API shape differs — see
-  # bot.py's refresh_potoken_task (POST /get_pot instead of GET /token).
-  potoken-generator:
-    image: brainicism/bgutil-ytdlp-pot-provider
-    container_name: potoken-generator
+  # Remote cipher service used by youtube-source to resolve signature extraction
+  # when YouTube player scripts change faster than local extraction logic.
+  yt-cipher:
+    image: ghcr.io/kikkia/yt-cipher:master
+    container_name: yt-cipher
     restart: unless-stopped
+    environment:
+      - OVERRIDE_PLAYER_VARIANT=IAS
     ports:
-      - "8090:4416"   # Published so the bot can reach it even when run outside Docker (via localhost:8090)
+      - "8001:8001"
     networks:
       - music
 
@@ -34,7 +31,7 @@ services:
     env_file: .env
     depends_on:
       - lavalink
-      - potoken-generator
+      - yt-cipher
     volumes:
       - ./jingles:/app/jingles
     ports:
