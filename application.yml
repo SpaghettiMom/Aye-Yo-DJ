@@ -24,9 +24,11 @@ lavalink:
       rotation: true
       channelMix: true
       lowPass: true
-    bufferDurationMs: 400
-    frameBufferDurationMs: 5000
-    opusEncodingQuality: 10
+    # Slightly larger buffers + lower opus complexity reduce audible micro-skips
+    # when homelab CPU/network jitter spikes briefly.
+    bufferDurationMs: 1000
+    frameBufferDurationMs: 15000
+    opusEncodingQuality: 7
     resamplingQuality: LOW
     trackStuckThresholdMs: 10000
     useSeekGhosting: true
@@ -57,10 +59,13 @@ plugins:
     # the TV client above).
     oauth:
       enabled: true
-      refreshToken: ""
+      # Set this via environment variable on each host.
+      refreshToken: "${YOUTUBE_OAUTH_REFRESH_TOKEN:}"
     # Remote cipher server handles signature/n-param deciphering when YouTube's
     # player scripts change faster than local extraction logic can keep up.
     # See docker-compose.yml (yt-cipher service, kikkia/yt-cipher).
+    # Route through host-gateway to avoid container DNS issues resolving
+    # service names on some Linux homelab Docker setups.
     remoteCipher:
       url: "http://host.docker.internal:8001"
 

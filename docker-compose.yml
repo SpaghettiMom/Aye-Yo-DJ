@@ -3,6 +3,11 @@ services:
     image: ghcr.io/lavalink-devs/lavalink:4
     container_name: lavalink
     restart: unless-stopped
+    environment:
+      - _JAVA_OPTIONS=-Xms256m -Xmx1g -XX:+UseG1GC -XX:MaxGCPauseMillis=100
+      - YOUTUBE_OAUTH_REFRESH_TOKEN=${YOUTUBE_OAUTH_REFRESH_TOKEN:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./application.yml:/opt/Lavalink/application.yml:ro
       - ./plugins:/opt/Lavalink/plugins
@@ -33,6 +38,7 @@ services:
       - lavalink
       - yt-cipher
     volumes:
+      - ./data:/app/data
       - ./jingles:/app/jingles
     ports:
       - "8765:8765"
